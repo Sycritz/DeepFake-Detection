@@ -1,3 +1,6 @@
+# datasets
+datasets/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -116,6 +119,9 @@ ipython_config.py
 #pdm.toml
 .pdm-python
 .pdm-build/
+
+#brainstorming
+plan.md
 
 # pixi
 #   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
