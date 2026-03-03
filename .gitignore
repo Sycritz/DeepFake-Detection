@@ -3,6 +3,8 @@ datasets/
 webdatasets/
 test-images/
 
+#Papers
+Papers/
 # models
 models/
 

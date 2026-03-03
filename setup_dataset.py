@@ -13,6 +13,13 @@ import tarfile
 from typing import List, Optional
 import random
 
+try:
+    import kagglehub
+    KAGGLE_AVAILABLE = True
+except ImportError:
+    KAGGLE_AVAILABLE = False
+    print("Warning: kagglehub not available. Install with: pip install kagglehub")
+
 class DatasetSetup:
     """Handles downloading and organizing deepfake detection datasets"""
     
@@ -34,6 +41,36 @@ class DatasetSetup:
             Path(dir_path).mkdir(parents=True, exist_ok=True)
         
         print(f"Directory structure created in {self.base_dir}")
+    
+    def download_kaggle_datasets(self):
+        """Download datasets from Kaggle using kagglehub"""
+        if not KAGGLE_AVAILABLE:
+            print("Error: kagglehub not available. Install with: pip install kagglehub")
+            return False
+        
+        print("Downloading datasets from Kaggle...")
+        
+        try:
+            # Download FaceForensics++ C23 dataset
+            print("Downloading FaceForensics++ C23 dataset...")
+            path_FFc23 = kagglehub.dataset_download(
+                "gradientvoyager/faceforensics-c23-extracted-faces-100k"
+            )
+            print(f"FaceForensics++ C23 downloaded to: {path_FFc23}")
+            
+            # Download Tiny GenImage dataset
+            print("Downloading Tiny GenImage dataset...")
+            path_GenImage = kagglehub.dataset_download("cartografia/unbiased-tiny-genimage")
+            print(f"Tiny GenImage downloaded to: {path_GenImage}")
+            
+            return {
+                "faceforensics": path_FFc23,
+                "genimage": path_GenImage
+            }
+            
+        except Exception as e:
+            print(f"Error downloading datasets: {e}")
+            return False
     
     def download_file(self, url: str, destination: str, description: str = "file") -> bool:
         """Download file with progress indication"""
@@ -219,31 +256,47 @@ def main():
     setup = DatasetSetup()
     
     print("\nDataset Setup Options:")
-    print("1. Setup from existing FaceForensics++ dataset")
-    print("2. Setup from existing Tiny GenImage dataset")
-    print("3. Create test dataset from existing data")
-    print("4. Show dataset statistics")
+    print("1. Download datasets from Kaggle")
+    print("2. Setup from existing FaceForensics++ dataset")
+    print("3. Setup from existing Tiny GenImage dataset")
+    print("4. Create test dataset from existing data")
+    print("5. Show dataset statistics")
     
-    choice = input("\nSelect option (1-4): ").strip()
+    choice = input("\nSelect option (1-5): ").strip()
     
     if choice == "1":
+        datasets = setup.download_kaggle_datasets()
+        if datasets:
+            print("Datasets downloaded successfully!")
+            print(f"FaceForensics++: {datasets['faceforensics']}")
+            print(f"Tiny GenImage: {datasets['genimage']}")
+            
+            # Ask if user wants to organize them
+            organize = input("Organize downloaded datasets? (y/n): ").strip().lower()
+            if organize == 'y':
+                if os.path.exists(datasets['faceforensics']):
+                    setup.setup_faceforensics_dataset(datasets['faceforensics'])
+                if os.path.exists(datasets['genimage']):
+                    setup.setup_tiny_genimage_dataset(datasets['genimage'])
+    
+    elif choice == "2":
         source_dir = input("Enter FaceForensics++ dataset path: ").strip()
         if os.path.exists(source_dir):
             setup.setup_faceforensics_dataset(source_dir)
         else:
             print("Path does not exist")
     
-    elif choice == "2":
+    elif choice == "3":
         source_dir = input("Enter Tiny GenImage dataset path: ").strip()
         if os.path.exists(source_dir):
             setup.setup_tiny_genimage_dataset(source_dir)
         else:
             print("Path does not exist")
     
-    elif choice == "3":
+    elif choice == "4":
         setup.create_test_dataset()
     
-    elif choice == "4":
+    elif choice == "5":
         stats = setup.get_dataset_stats()
         print("\nDataset Statistics:")
         for key, value in stats.items():
