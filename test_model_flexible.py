@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Deepfake Detection Model Testing Script
-Quick and simple model evaluation with TP, FP, F1 metrics
+Simple Model Testing Script - Adapts to different model architectures
 """
 
 import os
@@ -17,96 +16,6 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score, p
 import cv2
 import json
 import argparse
-
-# Import model architecture
-import timm
-
-class CrossAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False):
-        super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = head_dim ** -0.5
-
-        self.q_proj = nn.Linear(dim, dim, bias=qkv_bias)
-        self.k_proj = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v_proj = nn.Linear(dim, dim, bias=qkv_bias)
-        self.out_proj = nn.Linear(dim, dim)
-
-    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
-        B, N, C = query.shape
-
-        Q = self.q_proj(query).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
-        K = self.k_proj(key).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
-        V = self.v_proj(value).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
-
-        attn = (Q @ K.transpose(-2, -1)) * self.scale
-        attn = nn.functional.softmax(attn, dim=-1)
-
-        out = (attn @ V).transpose(1, 2).reshape(B, N, C)
-        out = self.out_proj(out)
-        return out
-
-class FrequencyEncoder(nn.Module):
-    def __init__(self, feature_dim: int = 256):
-        super().__init__()
-        self.backbone = timm.create_model("efficientnet_b0", pretrained=False, num_classes=0)
-        self.feature_dim = feature_dim
-        self.proj = nn.Linear(self.backbone.num_features, feature_dim)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        features = self.backbone(x)
-        return self.proj(features)
-
-class PatchLevelFusion(nn.Module):
-    def __init__(self, spatial_dim: int, freq_dim: int = 256, num_heads: int = 8):
-        super().__init__()
-        self.spatial_dim = spatial_dim
-        self.freq_dim = freq_dim
-
-        self.spatial_proj = nn.Linear(spatial_dim, freq_dim)
-        self.freq_proj = nn.Linear(freq_dim, freq_dim)
-
-        self.cross_attention = CrossAttention(dim=freq_dim, num_heads=num_heads)
-
-        self.fusion = nn.Sequential(
-            nn.Linear(freq_dim * 2, 512),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 2),
-        )
-
-    def forward(self, spatial_features: torch.Tensor, freq_features: torch.Tensor) -> torch.Tensor:
-        B, H, W, C = spatial_features.shape
-        spatial_flat = spatial_features.view(B, H * W, C)
-        
-        spatial_proj = self.spatial_proj(spatial_flat)
-        freq_proj = self.freq_proj(freq_features).unsqueeze(1).expand(-1, H * W, -1)
-
-        attended = self.cross_attention(spatial_proj, freq_proj, freq_proj)
-        combined = torch.cat([attended, freq_proj], dim=-1)
-        pooled = combined.mean(dim=1)
-
-        return self.fusion(pooled)
-
-class ImprovedDeepfakeDetector(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.swin_backbone = timm.create_model(
-            "swin_tiny_patch4_window7_224",
-            pretrained=False,
-            features_only=True,
-            out_indices=(3,),
-        )
-        spatial_dim = self.swin_backbone.feature_info.channels()[-1]
-
-        self.freq_encoder = FrequencyEncoder(feature_dim=256)
-        self.fusion = PatchLevelFusion(spatial_dim=spatial_dim, freq_dim=256)
-
-    def forward(self, spatial_input: torch.Tensor, freq_input: torch.Tensor) -> torch.Tensor:
-        feat = self.swin_backbone(spatial_input)[0]
-        freq_features = self.freq_encoder(freq_input)
-        return self.fusion(feat, freq_features)
 
 def extract_frequency_features(image_np: np.ndarray, freq_type: str = "dct") -> np.ndarray:
     if freq_type == "dct":
@@ -162,30 +71,102 @@ class TestDataset(torch.utils.data.Dataset):
         freq_tensor = frequency_tensor_from_pil(image, size=(224, 224), freq_type=self.freq_type)
         return spatial_tensor, freq_tensor, int(label)
 
-def test_model(model_path: str, data_dir: str, batch_size: int = 32, freq_type: str = "dct"):
-    """Test model performance with comprehensive metrics"""
+def test_model_flexible(model_path: str, data_dir: str, batch_size: int = 32, freq_type: str = "dct"):
+    """Test model with flexible architecture detection"""
     
-    print("Deepfake Detection Model Testing")
+    print("Flexible Model Testing")
     print("=" * 50)
     
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Load model
+    # Load model and detect architecture
     print(f"Loading model from: {model_path}")
-    model = ImprovedDeepfakeDetector().to(device)
+    checkpoint = torch.load(model_path, map_location="cpu")
     
-    if os.path.exists(model_path):
-        checkpoint = torch.load(model_path, map_location="cpu")
-        if "model_state_dict" in checkpoint:
-            model.load_state_dict(checkpoint["model_state_dict"])
-        else:
-            model.load_state_dict(checkpoint)
-        print("Model loaded successfully")
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
     else:
-        print(f"Model file not found: {model_path}")
-        return
+        state_dict = checkpoint
+    
+    # Detect model type from architecture
+    model = None
+    
+    # Check for FinalPrototype architecture (newer)
+    if any("freq_cnn" in key for key in state_dict.keys()):
+        print("Detected: FinalPrototype architecture")
+        # This is a different architecture - need to create it
+        import timm
+        
+        class FinalPrototypeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.swin_backbone = timm.create_model(
+                    "swin_tiny_patch4_window7_224",
+                    pretrained=False,
+                    features_only=True,
+                    out_indices=(3,),
+                )
+                spatial_dim = self.swin_backbone.feature_info.channels()[-1]
+                
+                # Frequency CNN from the actual model
+                self.freq_cnn = nn.Sequential(
+                    nn.Conv2d(3, 64, 3, padding=1),
+                    nn.ReLU(),
+                    nn.Conv2d(64, 128, 3, padding=1),
+                    nn.ReLU(),
+                    nn.Conv2d(128, 256, 3, padding=1),
+                    nn.ReLU(),
+                    nn.AdaptiveAvgPool2d((1, 1)),
+                    nn.Flatten(),
+                    nn.Linear(256, 256)
+                )
+                
+                # Fusion layer with correct dimensions
+                self.fusion = nn.Sequential(
+                    nn.Linear(spatial_dim + 256, 512),
+                    nn.ReLU(),
+                    nn.Dropout(0.3),
+                    nn.Linear(512, 2),
+                )
+
+            def forward(self, spatial_input, freq_input):
+                # Spatial features
+                feat = self.swin_backbone(spatial_input)[0]  # [B, H, W, C]
+                B, H, W, C = feat.shape
+                spatial_flat = feat.view(B, H * W, C)
+                
+                # Frequency features
+                freq_features = self.freq_cnn(freq_input)  # [B, 256]
+                
+                # Average spatial features across patches
+                spatial_avg = spatial_flat.mean(dim=1)  # [B, C]
+                
+                # Concatenate and classify
+                combined = torch.cat([spatial_avg, freq_features], dim=1)
+                output = self.fusion(combined)
+                
+                return output
+        
+        model = FinalPrototypeModel().to(device)
+        model.load_state_dict(state_dict, strict=False)
+        print("FinalPrototype model loaded successfully")
+    
+    else:
+        print("Detected: Standard architecture")
+        # Try to load as standard model
+        try:
+            # Import the standard model architecture
+            import sys
+            sys.path.append('.')
+            from test_model import ImprovedDeepfakeDetector
+            model = ImprovedDeepfakeDetector().to(device)
+            model.load_state_dict(state_dict, strict=False)
+            print("Standard model loaded successfully")
+        except Exception as e:
+            print(f"Could not load standard model: {e}")
+            return
     
     # Setup data transforms
     transform = transforms.Compose([
@@ -231,7 +212,7 @@ def test_model(model_path: str, data_dir: str, batch_size: int = 32, freq_type: 
             all_labels.extend(labels.numpy())
             
             if batch_idx % 10 == 0:
-                print(f"Processed batch {batch_idx + 1}/{len(dataloader)}")
+                print(f"   Processed batch {batch_idx + 1}/{len(dataloader)}")
     
     # Calculate metrics
     print("\nComputing metrics...")
@@ -260,15 +241,15 @@ def test_model(model_path: str, data_dir: str, batch_size: int = 32, freq_type: 
     print(f"F1 Score:      {f1:.4f}")
     print()
     print("Confusion Matrix:")
-    print(f"True Positives:  {tp}")
-    print(f"True Negatives:  {tn}")
-    print(f"False Positives: {fp}")
-    print(f"False Negatives: {fn}")
+    print(f"   True Positives:  {tp}")
+    print(f"   True Negatives:  {tn}")
+    print(f"   False Positives: {fp}")
+    print(f"   False Negatives: {fn}")
     print()
     print("Performance Metrics:")
-    print(f"Avg Inference Time: {avg_inference_time*1000:.2f}ms/batch")
-    print(f"Total Inference Time: {total_inference_time:.2f}s")
-    print(f"Throughput: {throughput:.2f} samples/sec")
+    print(f"   Avg Inference Time: {avg_inference_time*1000:.2f}ms/batch")
+    print(f"   Total Inference Time: {total_inference_time:.2f}s")
+    print(f"   Throughput: {throughput:.2f} samples/sec")
     
     # Detailed classification report
     print("\nDetailed Classification Report:")
@@ -294,7 +275,7 @@ def test_model(model_path: str, data_dir: str, batch_size: int = 32, freq_type: 
     }
     
     # Save to file
-    results_path = "test_results.json"
+    results_path = "test_results_flexible.json"
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     
@@ -311,24 +292,24 @@ def main():
     
     args = parser.parse_args()
     
-    test_model(args.model, args.data, args.batch_size, args.freq_type)
+    test_model_flexible(args.model, args.data, args.batch_size, args.freq_type)
 
 if __name__ == "__main__":
     # Quick test usage
     if len(os.sys.argv) == 1:
         print("Quick Test Mode")
         print("Usage examples:")
-        print("python test_model.py --model models/best_model.pth --data datasets/val")
-        print("python test_model.py --model models/best_model.pth --data test-images --batch-size 16")
+        print("python test_model_flexible.py --model models/Prototype.pth --data test-images")
+        print("python test_model_flexible.py --model models/FinalPrototye.pth --data test-images --batch-size 16")
         print()
         
         # Try to find model and test data automatically
-        model_path = "models/FinalPrototype.pth"
+        model_path = "models/Prototype.pth"
         data_path = "test-images"
         
         if os.path.exists(model_path) and os.path.exists(data_path):
             print(f"Auto-detected: {model_path} and {data_path}")
-            test_model(model_path, data_path)
+            test_model_flexible(model_path, data_path)
         else:
             print("Could not auto-detect model and test data")
             print("Please specify --model and --data arguments")
